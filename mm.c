@@ -76,7 +76,6 @@ unsigned int *root;
 
 static void *find_fit(size_t asize)
 {
-    printf("find\n");
     void *bp = root;
 
     while (bp != mem_heap_lo() && GET_SIZE(HDRP(bp)) < asize)
@@ -89,48 +88,45 @@ static void *find_fit(size_t asize)
     return bp;
 }
 
+void splice_free(void *bp)
+{
+    if (bp == root)
+    {
+        root = NEXT_FREE(bp);
+    }
+    else
+    {
+        PUT_NEXT_ADDRESS(PREV_FREE(bp), NEXT_FREE(bp));
+        if (NEXT_FREE(bp) != mem_heap_lo())
+            PUT_PREV_ADDRESS(NEXT_FREE(bp), PREV_FREE(bp));
+    }
+}
+
+void add_free(void *bp)
+{
+    if (root != mem_heap_lo())
+    {
+        PUT_PREV_ADDRESS(root, bp);
+    }
+    PUT_NEXT_ADDRESS(bp, root);
+    root = bp;
+}
+
 void place(void *bp, size_t asize)
 {
-    printf("place\n");
     size_t block_size = GET_SIZE(HDRP(bp));
     if ((block_size - asize) >= 2 * DSIZE)
     {
-        printf("here1\n");
         PUT(HDRP(bp), PACK(asize, 1));
         PUT(FTRP(bp), PACK(asize, 1));
         PUT(HDRP(NEXT_BLKP(bp)), PACK(block_size - asize, 0));
         PUT(FTRP(NEXT_BLKP(bp)), PACK(block_size - asize, 0));
-        printf("hh\n");
-        if (bp != root)
-        {
-            if (NEXT_FREE(bp) != mem_heap_lo())
-                PUT_PREV_ADDRESS(NEXT_FREE(bp), PREV_FREE(bp));
-            PUT_NEXT_ADDRESS(PREV_FREE(bp), NEXT_FREE(bp));
-        }
-        else
-        {
-            root = NEXT_FREE(bp);
-        }
-        if (root != mem_heap_lo())
-            PUT_PREV_ADDRESS(root, NEXT_BLKP(bp));
-        printf("??\n");
-        PUT_NEXT_ADDRESS(NEXT_BLKP(bp), root);
-        root = NEXT_BLKP(bp);
-        printf("???\n");
+        splice_free(bp);
+        add_free(NEXT_BLKP(bp));
     }
     else
     {
-        printf("here2\n");
-        if (bp != root)
-        {
-            PUT_NEXT_ADDRESS(PREV_FREE(bp), NEXT_FREE(bp));
-            if (NEXT_FREE(bp) != mem_heap_lo())
-                PUT_PREV_ADDRESS(NEXT_FREE(bp), PREV_FREE(bp));
-        }
-        else
-        {
-            root = NEXT_FREE(bp);
-        }
+        splice_free(bp);
         PUT(HDRP(bp), PACK(block_size, 1));
         PUT(FTRP(bp), PACK(block_size, 1));
     }
@@ -138,39 +134,20 @@ void place(void *bp, size_t asize)
 
 static void *coalesce(void *bp)
 {
-    printf("col\n");
     size_t prev_alloc = GET_ALLOC(FTRP(PREV_BLKP(bp)));
     size_t next_alloc = GET_ALLOC(HDRP(NEXT_BLKP(bp)));
     size_t size = GET_SIZE(HDRP(bp));
 
     if (prev_alloc && next_alloc)
     {
-        PUT_NEXT_ADDRESS(bp, root);
-        if (root != mem_heap_lo())
-            PUT_PREV_ADDRESS(root, bp);
-        root = bp;
+        add_free(bp);
     }
 
     else if (prev_alloc && !next_alloc)
     {
         size += GET_SIZE(HDRP(NEXT_BLKP(bp)));
-        if (root != NEXT_BLKP(bp))
-        {
-            if (PREV_FREE(NEXT_BLKP(bp)) != root)
-                PUT_NEXT_ADDRESS(PREV_FREE(NEXT_BLKP(bp)), NEXT_FREE(NEXT_BLKP(bp)));
-            if (NEXT_FREE(NEXT_BLKP(bp)) != mem_heap_lo())
-                PUT_PREV_ADDRESS(NEXT_FREE(NEXT_BLKP(bp)), PREV_FREE(NEXT_BLKP(bp)));
-            PUT_NEXT_ADDRESS(bp, root);
-            PUT_PREV_ADDRESS(root, bp);
-            root = bp;
-        }
-        else
-        {
-            root = bp;
-            PUT_NEXT_ADDRESS(bp, NEXT_FREE(NEXT_BLKP(bp)));
-            if (NEXT_FREE(NEXT_BLKP(bp)) != mem_heap_lo())
-                PUT_PREV_ADDRESS(NEXT_FREE(NEXT_BLKP(bp)), bp);
-        }
+        splice_free(NEXT_BLKP(bp));
+        add_free(bp);
         PUT(HDRP(bp), PACK(size, 0));
         PUT(FTRP(bp), PACK(size, 0));
     }
@@ -178,53 +155,20 @@ static void *coalesce(void *bp)
     else if (!prev_alloc && next_alloc)
     {
         size += GET_SIZE(HDRP(PREV_BLKP(bp)));
-        if (root != PREV_BLKP(bp))
-        {
-            if (PREV_FREE(PREV_BLKP(bp)) != root)
-                PUT_NEXT_ADDRESS(PREV_FREE(PREV_BLKP(bp)), NEXT_FREE(PREV_BLKP(bp)));
-            if (NEXT_FREE(PREV_BLKP(bp)) != mem_heap_lo())
-                PUT_PREV_ADDRESS(NEXT_FREE(PREV_BLKP(bp)), PREV_FREE(PREV_BLKP(bp)));
-            PUT_NEXT_ADDRESS(PREV_BLKP(bp), root);
-            PUT_PREV_ADDRESS(root, PREV_BLKP(bp));
-        }
-
+        splice_free(PREV_BLKP(bp));
         PUT(FTRP(bp), PACK(size, 0));
         PUT(HDRP(PREV_BLKP(bp)), PACK(size, 0));
+        add_free(PREV_BLKP(bp));
         bp = PREV_BLKP(bp);
-        root = bp;
     }
 
     else
     {
         size += GET_SIZE(HDRP(PREV_BLKP(bp))) + GET_SIZE(FTRP(NEXT_BLKP(bp)));
-        if (root != PREV_BLKP(bp))
-        {
-            if (PREV_FREE(PREV_BLKP(bp)) != root)
-                PUT_NEXT_ADDRESS(PREV_FREE(PREV_BLKP(bp)), NEXT_FREE(PREV_BLKP(bp)));
-            if (NEXT_FREE(PREV_BLKP(bp)) != mem_heap_lo())
-                PUT_PREV_ADDRESS(NEXT_FREE(PREV_BLKP(bp)), PREV_FREE(PREV_BLKP(bp)));
-            PUT_NEXT_ADDRESS(PREV_BLKP(bp), root);
-            PUT_PREV_ADDRESS(root, PREV_BLKP(bp));
-        }
-        else
-        {
-            root = NEXT_FREE(PREV_BLKP(bp));
-        }
-        if (root != NEXT_BLKP(bp))
-        {
-            PUT_NEXT_ADDRESS(PREV_FREE(NEXT_BLKP(bp)), NEXT_FREE(NEXT_BLKP(bp)));
-            if (NEXT_FREE(NEXT_BLKP(bp)) != mem_heap_lo())
-                PUT_PREV_ADDRESS(NEXT_FREE(NEXT_BLKP(bp)), PREV_FREE(NEXT_BLKP(bp)));
-        }
-        else
-        {
-            root = NEXT_FREE(NEXT_BLKP(bp));
-        }
 
-        PUT_NEXT_ADDRESS(PREV_BLKP(bp), root);
-        if (root != mem_heap_lo())
-            PUT_PREV_ADDRESS(root, PREV_BLKP(bp));
-        root = PREV_BLKP(bp);
+        splice_free(PREV_BLKP(bp));
+        splice_free(NEXT_BLKP(bp));
+        add_free(PREV_BLKP(bp));
 
         PUT(HDRP(PREV_BLKP(bp)), PACK(size, 0));
         PUT(FTRP(NEXT_BLKP(bp)), PACK(size, 0));
@@ -235,7 +179,6 @@ static void *coalesce(void *bp)
 
 static void *extend_heap(size_t words)
 {
-    printf("extend\n");
     char *bp;
     size_t size;
 
@@ -251,7 +194,6 @@ static void *extend_heap(size_t words)
 
 int mm_init(void)
 {
-    printf("init\n");
     if ((heap_listp = mem_sbrk(4 * WSIZE)) == (void *)-1)
         return -1;
 
@@ -273,7 +215,6 @@ int mm_init(void)
  */
 void *mm_malloc(size_t size)
 {
-    printf("mal\n");
     size_t asize;
     size_t extendsize;
     char *bp;
@@ -288,14 +229,12 @@ void *mm_malloc(size_t size)
     if ((bp = find_fit(asize)) != NULL)
     {
         place(bp, asize);
-        printf("^^\n");
         return bp;
     }
     extendsize = MAX(asize, CHUNKSIZE);
     if ((bp = extend_heap(extendsize / WSIZE)) == NULL)
         return NULL;
     place(bp, asize);
-    printf("$$\n");
     return bp;
 }
 
@@ -304,7 +243,6 @@ void *mm_malloc(size_t size)
  */
 void mm_free(void *ptr)
 {
-    printf('free\n');
     size_t size = GET_SIZE(HDRP(ptr));
 
     PUT(HDRP(ptr), PACK(size, 0));
@@ -317,7 +255,6 @@ void mm_free(void *ptr)
  */
 void *mm_realloc(void *ptr, size_t size)
 {
-    printf("real\n");
     void *oldptr = ptr;
     void *newptr;
     size_t copySize;
