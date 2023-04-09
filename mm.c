@@ -194,13 +194,16 @@ static void *extend_heap(size_t words)
 
 int mm_init(void)
 {
-    if ((heap_listp = mem_sbrk(4 * WSIZE)) == (void *)-1)
+    if ((heap_listp = mem_sbrk((4 + NUM_CLASS) * WSIZE)) == (void *)-1)
         return -1;
 
     PUT(heap_listp, 0);
-    PUT(heap_listp + (1 * WSIZE), PACK(DSIZE, 1));
-    PUT(heap_listp + (2 * WSIZE), PACK(DSIZE, 1));
-    PUT(heap_listp + (3 * WSIZE), PACK(0, 1));
+    size_t prolog_size = DSIZE + NUM_CLASS * WSIZE;
+    PUT(heap_listp + (1 * WSIZE), PACK(prolog_size, 1));
+    for (int i = 1; i <= NUM_CLASS; i++)
+        PUT(heap_listp + ((1 + i) * WSIZE), mem_heap_lo());
+    PUT(FTRP(heap_listp + (1 * WSIZE)), PACK(prolog_size, 1));
+    PUT(FTRP(heap_listp + (1 * WSIZE)) + 4, PACK(0, 1));
     heap_listp += (2 * WSIZE);
     root = mem_heap_lo();
 
