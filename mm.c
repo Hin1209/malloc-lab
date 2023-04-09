@@ -74,7 +74,6 @@ team_t team = {
  */
 
 void *heap_listp;
-unsigned int *root;
 
 static void *find_fit(size_t asize)
 {
