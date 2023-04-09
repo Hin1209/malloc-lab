@@ -67,6 +67,8 @@ team_t team = {
 #define PUT_NEXT_ADDRESS(bp, address) (*(unsigned int *)(bp) = (address))
 #define PUT_PREV_ADDRESS(bp, address) (*(unsigned int *)(((char *)(bp) + WSIZE)) = (address))
 
+#define NUM_CLASS 10
+
 /*
  * mm_init - initialize the malloc package.
  */
