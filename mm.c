@@ -78,7 +78,7 @@ void *heap_listp;
 static void *find_fit(size_t asize)
 {
     int class_num = 0;
-    size_t tmp_size = asize / 8;
+    size_t tmp_size = asize >> 3;
     while (tmp_size > 1)
     {
         tmp_size >>= 1;
@@ -86,24 +86,27 @@ static void *find_fit(size_t asize)
     }
     if (class_num > NUM_CLASS)
         class_num = NUM_CLASS;
-    void *bp = GET(heap_listp + (class_num - 1) * WSIZE);
 
-    while (bp == mem_heap_lo() && class_num <= NUM_CLASS)
+    void *bp;
+
+    while (class_num <= NUM_CLASS)
+    {
         bp = GET(heap_listp + (class_num++ - 1) * WSIZE);
-
-    if (class_num > NUM_CLASS)
-        class_num = NUM_CLASS;
-    while (bp != mem_heap_lo() && GET_SIZE(HDRP(bp)) <= asize)
-        bp = NEXT_FREE(bp);
-    if (bp == mem_heap_lo())
-        return NULL;
-
-    return bp;
+        if (bp != mem_heap_lo())
+        {
+            void *tmp = bp;
+            while (tmp != mem_heap_lo() && GET_SIZE(HDRP(tmp)) <= asize)
+                tmp = NEXT_FREE(tmp);
+            if (tmp != mem_heap_lo())
+                return tmp;
+        }
+    }
+    return NULL;
 }
 
 void splice_free(void *bp)
 {
-    size_t block_size = GET_SIZE(HDRP(bp)) / 8;
+    size_t block_size = GET_SIZE(HDRP(bp)) >> 3;
     int class_num = 0;
     while (block_size > 1)
     {
@@ -127,7 +130,7 @@ void splice_free(void *bp)
 
 void add_free(void *bp)
 {
-    size_t block_size = GET_SIZE(HDRP(bp)) / 8;
+    size_t block_size = GET_SIZE(HDRP(bp)) >> 3;
     int class_num = 0;
     while (block_size > 1)
     {
