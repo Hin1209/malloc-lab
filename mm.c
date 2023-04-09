@@ -77,23 +77,45 @@ void *heap_listp;
 
 static void *find_fit(size_t asize)
 {
-    void *bp = root;
-
-    while (bp != mem_heap_lo() && GET_SIZE(HDRP(bp)) < asize)
+    int class_num = 0;
+    size_t tmp_size = asize / 8;
+    while (tmp_size > 1)
     {
-        bp = NEXT_FREE(bp);
+        tmp_size >>= 1;
+        class_num++;
     }
+    if (class_num > NUM_CLASS)
+        class_num = NUM_CLASS;
+    void *bp = GET(heap_listp + (class_num - 1) * WSIZE);
 
+    while (bp == mem_heap_lo() && class_num <= NUM_CLASS)
+        bp = GET(heap_listp + (class_num++ - 1) * WSIZE);
+
+    if (class_num > NUM_CLASS)
+        class_num = NUM_CLASS;
+    while (bp != mem_heap_lo() && GET_SIZE(HDRP(bp)) <= asize)
+        bp = NEXT_FREE(bp);
     if (bp == mem_heap_lo())
         return NULL;
+
     return bp;
 }
 
 void splice_free(void *bp)
 {
+    size_t block_size = GET_SIZE(HDRP(bp)) / 8;
+    int class_num = 0;
+    while (block_size > 1)
+    {
+        block_size >>= 1;
+        class_num++;
+    }
+    if (class_num > NUM_CLASS)
+        class_num = NUM_CLASS;
+    void *root = GET(heap_listp + (class_num - 1) * WSIZE);
     if (bp == root)
     {
-        root = NEXT_FREE(bp);
+        PUT(heap_listp + (class_num - 1) * WSIZE, NEXT_FREE(bp));
     }
     else
     {
@@ -105,12 +127,22 @@ void splice_free(void *bp)
 
 void add_free(void *bp)
 {
+    size_t block_size = GET_SIZE(HDRP(bp)) / 8;
+    int class_num = 0;
+    while (block_size > 1)
+    {
+        block_size >>= 1;
+        class_num++;
+    }
+    if (class_num > NUM_CLASS)
+        class_num = NUM_CLASS;
+    void *root = GET(heap_listp + (class_num - 1) * WSIZE);
     if (root != mem_heap_lo())
     {
         PUT_PREV_ADDRESS(root, bp);
     }
     PUT_NEXT_ADDRESS(bp, root);
-    root = bp;
+    PUT(heap_listp + (class_num - 1) * WSIZE, bp);
 }
 
 void place(void *bp, size_t asize)
@@ -118,11 +150,11 @@ void place(void *bp, size_t asize)
     size_t block_size = GET_SIZE(HDRP(bp));
     if ((block_size - asize) >= 2 * DSIZE)
     {
+        splice_free(bp);
         PUT(HDRP(bp), PACK(asize, 1));
         PUT(FTRP(bp), PACK(asize, 1));
         PUT(HDRP(NEXT_BLKP(bp)), PACK(block_size - asize, 0));
         PUT(FTRP(NEXT_BLKP(bp)), PACK(block_size - asize, 0));
-        splice_free(bp);
         add_free(NEXT_BLKP(bp));
     }
     else
@@ -148,9 +180,9 @@ static void *coalesce(void *bp)
     {
         size += GET_SIZE(HDRP(NEXT_BLKP(bp)));
         splice_free(NEXT_BLKP(bp));
-        add_free(bp);
         PUT(HDRP(bp), PACK(size, 0));
         PUT(FTRP(bp), PACK(size, 0));
+        add_free(bp);
     }
 
     else if (!prev_alloc && next_alloc)
@@ -169,10 +201,10 @@ static void *coalesce(void *bp)
 
         splice_free(PREV_BLKP(bp));
         splice_free(NEXT_BLKP(bp));
-        add_free(PREV_BLKP(bp));
 
         PUT(HDRP(PREV_BLKP(bp)), PACK(size, 0));
         PUT(FTRP(NEXT_BLKP(bp)), PACK(size, 0));
+        add_free(PREV_BLKP(bp));
         bp = PREV_BLKP(bp);
     }
     return bp;
@@ -203,10 +235,9 @@ int mm_init(void)
     PUT(heap_listp + (1 * WSIZE), PACK(prolog_size, 1));
     for (int i = 1; i <= NUM_CLASS; i++)
         PUT(heap_listp + ((1 + i) * WSIZE), mem_heap_lo());
-    PUT(FTRP(heap_listp + (1 * WSIZE)), PACK(prolog_size, 1));
-    PUT(FTRP(heap_listp + (1 * WSIZE)) + 4, PACK(0, 1));
+    PUT(heap_listp + ((2 + NUM_CLASS) * WSIZE), PACK(prolog_size, 1));
+    PUT(heap_listp + ((3 + NUM_CLASS) * WSIZE), PACK(0, 1));
     heap_listp += (2 * WSIZE);
-    root = mem_heap_lo();
 
     if (extend_heap(CHUNKSIZE / WSIZE) == NULL)
         return -1;
