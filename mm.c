@@ -95,7 +95,7 @@ static void *find_fit(size_t asize)
         if (bp != mem_heap_lo())
         {
             void *tmp = bp;
-            while (tmp != mem_heap_lo() && GET_SIZE(HDRP(tmp)) <= asize)
+            while (tmp != mem_heap_lo() && GET_SIZE(HDRP(tmp)) < asize)
                 tmp = NEXT_FREE(tmp);
             if (tmp != mem_heap_lo())
                 return tmp;
