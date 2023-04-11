@@ -67,12 +67,12 @@ team_t team = {
 #define PUT_NEXT_ADDRESS(bp, address) (*(unsigned int *)(bp) = (address))
 #define PUT_PREV_ADDRESS(bp, address) (*(unsigned int *)(((char *)(bp) + WSIZE)) = (address))
 
-#define NUM_CLASS 12
+#define NUM_CLASS 10
 
-int tmp = 0;
 /*
  * mm_init - initialize the malloc package.
  */
+static void *coalesce(void *bp);
 
 void *heap_listp;
 
@@ -111,7 +111,13 @@ static void *find_fit(size_t asize)
     {
         bp = GET(heap_listp + (class_num++ - 1) * WSIZE);
         if (bp != mem_heap_lo())
-            return bp;
+        {
+            void *tmp = bp;
+            while (tmp != mem_heap_lo() && GET_SIZE(HDRP(tmp)) < asize)
+                tmp = NEXT_FREE(tmp);
+            if (tmp != mem_heap_lo())
+                return tmp;
+        }
     }
     return NULL;
 }
@@ -158,20 +164,42 @@ void place(void *bp, size_t asize)
 {
     size_t block_size = GET_SIZE(HDRP(bp));
     size_t spare_size = block_size - asize;
+    void *candidate = NEXT_BLKP(bp);
     if (asize < spare_size)
     {
         splice_free(bp);
         PUT(HDRP(bp), PACK(asize, 1));
         PUT(FTRP(bp), PACK(asize, 1));
         size_t tmp_size = block_size / 2;
-        while (spare_size >= 16)
+        void *next_bp = NEXT_BLKP(bp);
+        if (!GET_ALLOC(HDRP(candidate)) && can_merge(spare_size + GET_SIZE(HDRP(candidate))))
         {
-            PUT(HDRP(NEXT_BLKP(bp)), PACK(tmp_size, 0));
-            PUT(FTRP(NEXT_BLKP(bp)), PACK(tmp_size, 0));
-            add_free(NEXT_BLKP(bp));
-            bp = NEXT_BLKP(bp);
-            spare_size -= tmp_size;
-            tmp_size >>= 1;
+            splice_free(candidate);
+            size_t new_size = spare_size + GET_SIZE(HDRP(candidate));
+            PUT(HDRP(next_bp), PACK(new_size, 0));
+            PUT(FTRP(next_bp), PACK(new_size, 0));
+            add_free(next_bp);
+        }
+        else
+        {
+            while (spare_size >= 16)
+            {
+                PUT(HDRP(next_bp), PACK(tmp_size, 0));
+                PUT(FTRP(next_bp), PACK(tmp_size, 0));
+                add_free(next_bp);
+                next_bp = NEXT_BLKP(next_bp);
+                spare_size -= tmp_size;
+                if (!GET_ALLOC(HDRP(candidate)) && can_merge(spare_size + GET_SIZE(HDRP(candidate))))
+                {
+                    splice_free(candidate);
+                    size_t new_size = spare_size + GET_SIZE(HDRP(candidate));
+                    PUT(HDRP(next_bp), PACK(new_size, 0));
+                    PUT(FTRP(next_bp), PACK(new_size, 0));
+                    add_free(next_bp);
+                    break;
+                }
+                tmp_size >>= 1;
+            }
         }
     }
     else
@@ -244,7 +272,7 @@ static void *coalesce(void *bp)
         }
         else if (left_merge && right_merge)
         {
-            if (GET_SIZE(PREV_BLKP(bp)) > GET_SIZE(NEXT_BLKP(bp)))
+            if (GET_SIZE(PREV_BLKP(bp)) >= GET_SIZE(NEXT_BLKP(bp)))
             {
                 size += GET_SIZE(HDRP(PREV_BLKP(bp)));
                 splice_free(PREV_BLKP(bp));
@@ -293,9 +321,14 @@ static void *extend_heap(size_t words)
 {
     char *bp;
     size_t size;
-
-    size = (words % 2) ? (words + 1) * WSIZE : words * WSIZE;
-    printf("end: %x\n", mem_heap_hi() + words * WSIZE - mem_heap_lo());
+    void *last_foo = mem_heap_hi() - 7;
+    void *last_bp = last_foo - GET_SIZE(last_foo) + 8;
+    if (!GET_ALLOC(last_foo))
+    {
+        size = (words * WSIZE) - GET_SIZE(last_foo);
+    }
+    else
+        size = words * WSIZE;
     if ((long)(bp = mem_sbrk(size)) == -1)
         return NULL;
     PUT(HDRP(bp), PACK(size, 0));
@@ -361,7 +394,6 @@ void mm_free(void *ptr)
     PUT(FTRP(ptr), PACK(size, 0));
     coalesce(ptr);
 }
-
 /*
  * mm_realloc - Implemented simply in terms of mm_malloc and mm_free
  */
