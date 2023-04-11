@@ -67,7 +67,7 @@ team_t team = {
 #define PUT_NEXT_ADDRESS(bp, address) (*(unsigned int *)(bp) = (address))
 #define PUT_PREV_ADDRESS(bp, address) (*(unsigned int *)(((char *)(bp) + WSIZE)) = (address))
 
-#define NUM_CLASS 10
+#define NUM_CLASS 20
 
 /*
  * mm_init - initialize the malloc package.
@@ -163,155 +163,64 @@ void add_free(void *bp)
 void place(void *bp, size_t asize)
 {
     size_t block_size = GET_SIZE(HDRP(bp));
-    size_t spare_size = block_size - asize;
-    void *candidate = NEXT_BLKP(bp);
-    if (asize < spare_size)
+
+    splice_free(bp);
+
+    while (block_size > asize)
     {
-        splice_free(bp);
-        PUT(HDRP(bp), PACK(asize, 1));
-        PUT(FTRP(bp), PACK(asize, 1));
-        size_t tmp_size = block_size / 2;
-        void *next_bp = NEXT_BLKP(bp);
-        if (!GET_ALLOC(HDRP(candidate)) && can_merge(spare_size + GET_SIZE(HDRP(candidate))))
-        {
-            splice_free(candidate);
-            size_t new_size = spare_size + GET_SIZE(HDRP(candidate));
-            PUT(HDRP(next_bp), PACK(new_size, 0));
-            PUT(FTRP(next_bp), PACK(new_size, 0));
-            add_free(next_bp);
-        }
-        else
-        {
-            while (spare_size >= 16)
-            {
-                PUT(HDRP(next_bp), PACK(tmp_size, 0));
-                PUT(FTRP(next_bp), PACK(tmp_size, 0));
-                add_free(next_bp);
-                next_bp = NEXT_BLKP(next_bp);
-                spare_size -= tmp_size;
-                if (!GET_ALLOC(HDRP(candidate)) && can_merge(spare_size + GET_SIZE(HDRP(candidate))))
-                {
-                    splice_free(candidate);
-                    size_t new_size = spare_size + GET_SIZE(HDRP(candidate));
-                    PUT(HDRP(next_bp), PACK(new_size, 0));
-                    PUT(FTRP(next_bp), PACK(new_size, 0));
-                    add_free(next_bp);
-                    break;
-                }
-                tmp_size >>= 1;
-            }
-        }
+        block_size >>= 1;
+        PUT(HDRP(bp), PACK(block_size, 0));
+        PUT(FTRP(bp), PACK(block_size, 0));
+        PUT(HDRP(NEXT_BLKP(bp)), PACK(block_size, 0));
+        PUT(FTRP(NEXT_BLKP(bp)), PACK(block_size, 0));
+        add_free(NEXT_BLKP(bp));
     }
-    else
-    {
-        splice_free(bp);
-        PUT(HDRP(bp), PACK(block_size, 1));
-        PUT(FTRP(bp), PACK(block_size, 1));
-    }
+
+    PUT(HDRP(bp), PACK(block_size, 1));
+    PUT(FTRP(bp), PACK(block_size, 1));
 }
 
 static void *coalesce(void *bp)
 {
-    size_t prev_alloc = GET_ALLOC(FTRP(PREV_BLKP(bp)));
-    size_t next_alloc = GET_ALLOC(HDRP(NEXT_BLKP(bp)));
+    add_free(bp);
     size_t size = GET_SIZE(HDRP(bp));
-    size_t tmp_size;
-    int can_split = 1;
+    void *root = mem_heap_lo() + 3 * WSIZE;
+    long relative_bp;
+    void *buddy;
 
-    if (prev_alloc && next_alloc)
+    while (1)
     {
-        add_free(bp);
-        return bp;
-    }
-
-    else if (prev_alloc && !next_alloc)
-    {
-        size += GET_SIZE(HDRP(NEXT_BLKP(bp)));
-        if (can_merge(size))
+        relative_bp = bp - root;
+        if (relative_bp & size)
         {
-            splice_free(NEXT_BLKP(bp));
-            PUT(HDRP(bp), PACK(size, 0));
-            PUT(FTRP(bp), PACK(size, 0));
-        }
-        add_free(bp);
-    }
-
-    else if (!prev_alloc && next_alloc)
-    {
-        size += GET_SIZE(HDRP(PREV_BLKP(bp)));
-        if (can_merge(size))
-        {
-            splice_free(PREV_BLKP(bp));
-            PUT(FTRP(bp), PACK(size, 0));
-            PUT(HDRP(PREV_BLKP(bp)), PACK(size, 0));
-            add_free(PREV_BLKP(bp));
-            bp = PREV_BLKP(bp);
+            buddy = (relative_bp - size) + root;
+            if (!GET_ALLOC(HDRP(buddy)) && GET_SIZE(HDRP(buddy)) == size)
+            {
+                splice_free(bp);
+                splice_free(buddy);
+                size <<= 1;
+                PUT(HDRP(buddy), PACK(size, 0));
+                PUT(FTRP(buddy), PACK(size, 0));
+                add_free(buddy);
+                bp = buddy;
+            }
+            else
+                break;
         }
         else
         {
-            add_free(bp);
-        }
-    }
-
-    else
-    {
-        int left_merge = can_merge(size + GET_SIZE(PREV_BLKP(bp)));
-        int right_merge = can_merge(size + GET_SIZE(NEXT_BLKP(bp)));
-        int full_merge = can_merge(size + GET_SIZE(PREV_BLKP(bp)) + GET_SIZE(NEXT_BLKP(bp)));
-        if (full_merge)
-        {
-            size += GET_SIZE(HDRP(PREV_BLKP(bp))) + GET_SIZE(FTRP(NEXT_BLKP(bp)));
-
-            splice_free(PREV_BLKP(bp));
-            splice_free(NEXT_BLKP(bp));
-
-            PUT(HDRP(PREV_BLKP(bp)), PACK(size, 0));
-            PUT(FTRP(NEXT_BLKP(bp)), PACK(size, 0));
-            add_free(PREV_BLKP(bp));
-            bp = PREV_BLKP(bp);
-        }
-        else if (left_merge && right_merge)
-        {
-            if (GET_SIZE(PREV_BLKP(bp)) >= GET_SIZE(NEXT_BLKP(bp)))
+            buddy = (relative_bp + size) + root;
+            if (!GET_ALLOC(HDRP(buddy)) && GET_SIZE(HDRP(buddy)) == size)
             {
-                size += GET_SIZE(HDRP(PREV_BLKP(bp)));
-                splice_free(PREV_BLKP(bp));
-                PUT(HDRP(PREV_BLKP(bp)), PACK(size, 0));
-                PUT(FTRP(bp), PACK(size, 0));
-                add_free(PREV_BLKP(bp));
-                bp = PREV_BLKP(bp);
-            }
-            else
-            {
-                size += GET_SIZE(HDRP(NEXT_BLKP(bp)));
-                splice_free(NEXT_BLKP(bp));
+                splice_free(bp);
+                splice_free(buddy);
+                size <<= 1;
                 PUT(HDRP(bp), PACK(size, 0));
                 PUT(FTRP(bp), PACK(size, 0));
                 add_free(bp);
             }
-        }
-        else if (left_merge && !right_merge)
-        {
-            size += GET_SIZE(HDRP(PREV_BLKP(bp)));
-            splice_free(PREV_BLKP(bp));
-            PUT(HDRP(PREV_BLKP(bp)), PACK(size, 0));
-            PUT(FTRP(bp), PACK(size, 0));
-            add_free(PREV_BLKP(bp));
-            bp = PREV_BLKP(bp);
-        }
-        else if (right_merge && !left_merge)
-        {
-            size += GET_SIZE(HDRP(NEXT_BLKP(bp)));
-            splice_free(NEXT_BLKP(bp));
-            PUT(HDRP(bp), PACK(size, 0));
-            PUT(FTRP(bp), PACK(size, 0));
-            add_free(bp);
-        }
-        else if (!left_merge && !right_merge && !full_merge)
-        {
-            PUT(HDRP(bp), PACK(size, 0));
-            PUT(FTRP(bp), PACK(size, 0));
-            add_free(bp);
+            else
+                break;
         }
     }
     return bp;
@@ -321,14 +230,8 @@ static void *extend_heap(size_t words)
 {
     char *bp;
     size_t size;
-    void *last_foo = mem_heap_hi() - 7;
-    void *last_bp = last_foo - GET_SIZE(last_foo) + 8;
-    if (!GET_ALLOC(last_foo))
-    {
-        size = (words * WSIZE) - GET_SIZE(last_foo);
-    }
-    else
-        size = words * WSIZE;
+
+    size = words * WSIZE;
     if ((long)(bp = mem_sbrk(size)) == -1)
         return NULL;
     PUT(HDRP(bp), PACK(size, 0));
