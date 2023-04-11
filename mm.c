@@ -104,15 +104,40 @@ static void *find_fit(size_t asize)
     return NULL;
 }
 
-void splice_free(void *bp)
+int get_class(size_t size)
 {
-    size_t block_size = GET_SIZE(HDRP(bp)) >> 3;
     int class_num = 0;
-    while (block_size > 1)
+    size_t tmp_size = size >> 3;
+    while (tmp_size > 1)
     {
-        block_size >>= 1;
+        tmp_size >>= 1;
         class_num++;
     }
+    return class_num;
+}
+
+static void *find_insert_location(void *bp)
+{
+    size_t size = GET_SIZE(HDRP(bp));
+    int class_num = get_class(size);
+
+    if (class_num > NUM_CLASS)
+        class_num = NUM_CLASS;
+
+    void *root = GET(heap_listp + (class_num - 1) * WSIZE);
+    while (root != mem_heap_lo() && bp > root)
+    {
+        if (NEXT_FREE(root) == mem_heap_lo() || bp < NEXT_FREE(root))
+            return root;
+        root = NEXT_FREE(root);
+    }
+    return root;
+}
+
+void splice_free(void *bp)
+{
+    size_t block_size = GET_SIZE(HDRP(bp));
+    int class_num = get_class(block_size);
     if (class_num > NUM_CLASS)
         class_num = NUM_CLASS;
     void *root = GET(heap_listp + (class_num - 1) * WSIZE);
@@ -128,24 +153,27 @@ void splice_free(void *bp)
     }
 }
 
-void add_free(void *bp)
+void add_free(void *bp, void *prev)
 {
-    size_t block_size = GET_SIZE(HDRP(bp)) >> 3;
-    int class_num = 0;
-    while (block_size > 1)
-    {
-        block_size >>= 1;
-        class_num++;
-    }
+    size_t block_size = GET_SIZE(HDRP(bp));
+    int class_num = get_class(block_size);
     if (class_num > NUM_CLASS)
         class_num = NUM_CLASS;
     void *root = GET(heap_listp + (class_num - 1) * WSIZE);
-    if (root != mem_heap_lo())
+    if (root == prev)
     {
-        PUT_PREV_ADDRESS(root, bp);
+        PUT(heap_listp + (class_num - 1) * WSIZE, bp);
+        PUT_NEXT_ADDRESS(bp, prev);
+        if (prev != mem_heap_lo())
+            PUT_PREV_ADDRESS(prev, bp);
     }
-    PUT_NEXT_ADDRESS(bp, root);
-    PUT(heap_listp + (class_num - 1) * WSIZE, bp);
+    else
+    {
+        PUT_NEXT_ADDRESS(PREV_FREE(prev), bp);
+        PUT_PREV_ADDRESS(bp, PREV_FREE(prev));
+        PUT_PREV_ADDRESS(prev, bp);
+        PUT_NEXT_ADDRESS(bp, prev);
+    }
 }
 
 void place(void *bp, size_t asize)
@@ -158,7 +186,7 @@ void place(void *bp, size_t asize)
         PUT(FTRP(bp), PACK(asize, 1));
         PUT(HDRP(NEXT_BLKP(bp)), PACK(block_size - asize, 0));
         PUT(FTRP(NEXT_BLKP(bp)), PACK(block_size - asize, 0));
-        add_free(NEXT_BLKP(bp));
+        add_free(NEXT_BLKP(bp), find_insert_location(NEXT_BLKP(bp)));
     }
     else
     {
@@ -176,7 +204,7 @@ static void *coalesce(void *bp)
 
     if (prev_alloc && next_alloc)
     {
-        add_free(bp);
+        add_free(bp, find_insert_location(bp));
     }
 
     else if (prev_alloc && !next_alloc)
@@ -185,7 +213,7 @@ static void *coalesce(void *bp)
         splice_free(NEXT_BLKP(bp));
         PUT(HDRP(bp), PACK(size, 0));
         PUT(FTRP(bp), PACK(size, 0));
-        add_free(bp);
+        add_free(bp, find_insert_location(bp));
     }
 
     else if (!prev_alloc && next_alloc)
@@ -194,7 +222,7 @@ static void *coalesce(void *bp)
         splice_free(PREV_BLKP(bp));
         PUT(FTRP(bp), PACK(size, 0));
         PUT(HDRP(PREV_BLKP(bp)), PACK(size, 0));
-        add_free(PREV_BLKP(bp));
+        add_free(PREV_BLKP(bp), find_insert_location(PREV_BLKP(bp)));
         bp = PREV_BLKP(bp);
     }
 
@@ -207,7 +235,7 @@ static void *coalesce(void *bp)
 
         PUT(HDRP(PREV_BLKP(bp)), PACK(size, 0));
         PUT(FTRP(NEXT_BLKP(bp)), PACK(size, 0));
-        add_free(PREV_BLKP(bp));
+        add_free(PREV_BLKP(bp), find_insert_location(PREV_BLKP(bp)));
         bp = PREV_BLKP(bp);
     }
     return bp;
