@@ -41,10 +41,6 @@ team_t team = {
 #define CHUNKSIZE (1 << 12)
 
 /* rounds up to the nearest multiple of ALIGNMENT */
-#define ALIGN(size) (((size) + (ALIGNMENT - 1)) & ~0x7)
-
-#define SIZE_T_SIZE (ALIGN(sizeof(size_t)))
-
 #define MAX(x, y) ((x) > (y) ? (x) : (y))
 
 #define PACK(size, alloc) ((size) | (alloc))
@@ -61,13 +57,19 @@ team_t team = {
 #define NEXT_BLKP(bp) ((char *)(bp) + GET_SIZE(((char *)(bp)-WSIZE)))
 #define PREV_BLKP(bp) ((char *)(bp)-GET_SIZE(((char *)(bp)-DSIZE)))
 
-#define NEXT_FREE(bp) (*(unsigned int *)(bp))
-#define PREV_FREE(bp) (*(unsigned int *)((char *)(bp) + WSIZE))
+#define NEXT_FREE(bp) (*(unsigned int *)(bp))                   // 다음 free block의 block pointer를 return
+#define PREV_FREE(bp) (*(unsigned int *)((char *)(bp) + WSIZE)) // 이전 free block의 block pointer를 return
 
-#define PUT_NEXT_ADDRESS(bp, address) (*(unsigned int *)(bp) = (address))
-#define PUT_PREV_ADDRESS(bp, address) (*(unsigned int *)(((char *)(bp) + WSIZE)) = (address))
+#define PUT_NEXT_ADDRESS(bp, address) (*(unsigned int *)(bp) = (address))                     // bp의 next free block으로 address를 설정
+#define PUT_PREV_ADDRESS(bp, address) (*(unsigned int *)(((char *)(bp) + WSIZE)) = (address)) // bp의 previous free block으로 address를 설정
 
 #define NUM_CLASS 10
+
+int get_class(size_t size);
+void splice_free(void *bp);
+void add_free(void *bp);
+void place(void *bp, size_t asize);
+static void *coalesce(void *bp);
 
 /*
  * mm_init - initialize the malloc package.
@@ -75,10 +77,12 @@ team_t team = {
 
 void *heap_listp;
 
-static void *find_fit(size_t asize)
+// size에 대한 class 구하는 함수
+int get_class(size_t size)
 {
-    int class_num = 0;
-    size_t tmp_size = asize >> 3;
+    int class_num = 1;
+    size_t tmp_size = size >> 4;
+
     while (tmp_size > 1)
     {
         tmp_size >>= 1;
@@ -86,7 +90,13 @@ static void *find_fit(size_t asize)
     }
     if (class_num > NUM_CLASS)
         class_num = NUM_CLASS;
+    return class_num;
+}
 
+// asize를 할당할 수 있는 free block을 찾는 함수
+static void *find_fit(size_t asize)
+{
+    int class_num = get_class(asize);
     void *bp;
 
     while (class_num <= NUM_CLASS)
@@ -104,17 +114,11 @@ static void *find_fit(size_t asize)
     return NULL;
 }
 
+// bp를 free list에서 빼는 함수 - prev block과 next block의 연결 조정
 void splice_free(void *bp)
 {
-    size_t block_size = GET_SIZE(HDRP(bp)) >> 3;
-    int class_num = 0;
-    while (block_size > 1)
-    {
-        block_size >>= 1;
-        class_num++;
-    }
-    if (class_num > NUM_CLASS)
-        class_num = NUM_CLASS;
+    size_t block_size = GET_SIZE(HDRP(bp));
+    int class_num = get_class(block_size);
     void *root = GET(heap_listp + (class_num - 1) * WSIZE);
     if (bp == root)
     {
@@ -128,17 +132,11 @@ void splice_free(void *bp)
     }
 }
 
+// bp를 free list의 맨 앞에 넣는 함수
 void add_free(void *bp)
 {
     size_t block_size = GET_SIZE(HDRP(bp)) >> 3;
-    int class_num = 0;
-    while (block_size > 1)
-    {
-        block_size >>= 1;
-        class_num++;
-    }
-    if (class_num > NUM_CLASS)
-        class_num = NUM_CLASS;
+    int class_num = get_class(block_size);
     void *root = GET(heap_listp + (class_num - 1) * WSIZE);
     if (root != mem_heap_lo())
     {
@@ -148,6 +146,7 @@ void add_free(void *bp)
     PUT(heap_listp + (class_num - 1) * WSIZE, bp);
 }
 
+// bp에 asize 만큼의 공간을 할당하는 함수
 void place(void *bp, size_t asize)
 {
     size_t block_size = GET_SIZE(HDRP(bp));
@@ -168,24 +167,19 @@ void place(void *bp, size_t asize)
     }
 }
 
+// 앞 뒤 block의 할당 여부를 검사하고 free block들을 합쳐주는 함수
 static void *coalesce(void *bp)
 {
     size_t prev_alloc = GET_ALLOC(FTRP(PREV_BLKP(bp)));
     size_t next_alloc = GET_ALLOC(HDRP(NEXT_BLKP(bp)));
     size_t size = GET_SIZE(HDRP(bp));
 
-    if (prev_alloc && next_alloc)
-    {
-        add_free(bp);
-    }
-
-    else if (prev_alloc && !next_alloc)
+    if (prev_alloc && !next_alloc)
     {
         size += GET_SIZE(HDRP(NEXT_BLKP(bp)));
         splice_free(NEXT_BLKP(bp));
         PUT(HDRP(bp), PACK(size, 0));
         PUT(FTRP(bp), PACK(size, 0));
-        add_free(bp);
     }
 
     else if (!prev_alloc && next_alloc)
@@ -194,7 +188,6 @@ static void *coalesce(void *bp)
         splice_free(PREV_BLKP(bp));
         PUT(FTRP(bp), PACK(size, 0));
         PUT(HDRP(PREV_BLKP(bp)), PACK(size, 0));
-        add_free(PREV_BLKP(bp));
         bp = PREV_BLKP(bp);
     }
 
@@ -207,9 +200,9 @@ static void *coalesce(void *bp)
 
         PUT(HDRP(PREV_BLKP(bp)), PACK(size, 0));
         PUT(FTRP(NEXT_BLKP(bp)), PACK(size, 0));
-        add_free(PREV_BLKP(bp));
         bp = PREV_BLKP(bp);
     }
+    add_free(bp);
     return bp;
 }
 
@@ -247,10 +240,6 @@ int mm_init(void)
     return 0;
 }
 
-/*
- * mm_malloc - Allocate a block by incrementing the brk pointer.
- *     Always allocate a block whose size is a multiple of the alignment.
- */
 void *mm_malloc(size_t size)
 {
     size_t asize;
@@ -276,9 +265,6 @@ void *mm_malloc(size_t size)
     return bp;
 }
 
-/*
- * mm_free - Freeing a block does nothing.
- */
 void mm_free(void *ptr)
 {
     size_t size = GET_SIZE(HDRP(ptr));
@@ -288,9 +274,6 @@ void mm_free(void *ptr)
     coalesce(ptr);
 }
 
-/*
- * mm_realloc - Implemented simply in terms of mm_malloc and mm_free
- */
 void *mm_realloc(void *ptr, size_t size)
 {
     void *oldptr = ptr;
