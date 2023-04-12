@@ -135,7 +135,7 @@ void splice_free(void *bp)
 // bp를 free list의 맨 앞에 넣는 함수
 void add_free(void *bp)
 {
-    size_t block_size = GET_SIZE(HDRP(bp)) >> 3;
+    size_t block_size = GET_SIZE(HDRP(bp));
     int class_num = get_class(block_size);
     void *root = GET(heap_listp + (class_num - 1) * WSIZE);
     if (root != mem_heap_lo())
@@ -191,7 +191,7 @@ static void *coalesce(void *bp)
         bp = PREV_BLKP(bp);
     }
 
-    else
+    else if (!prev_alloc && !next_alloc)
     {
         size += GET_SIZE(HDRP(PREV_BLKP(bp))) + GET_SIZE(FTRP(NEXT_BLKP(bp)));
 
@@ -234,6 +234,8 @@ int mm_init(void)
     PUT(heap_listp + ((2 + NUM_CLASS) * WSIZE), PACK(prolog_size, 1));
     PUT(heap_listp + ((3 + NUM_CLASS) * WSIZE), PACK(0, 1));
     heap_listp += (2 * WSIZE);
+
+    extend_heap(8);
 
     if (extend_heap(CHUNKSIZE / WSIZE) == NULL)
         return -1;
